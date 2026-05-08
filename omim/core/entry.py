@@ -72,11 +72,14 @@ class Entry(OMIM):
         # geneMap / phenotypeMap tables
         self._parse_gene_phenotype_maps(soup, data)
 
+        # phenotypic series derived from geneMap (gene entries list their
+        # associated phenotypes; phenotype entries list their causal gene)
+        data['phenotypic_series'] = self._derive_phenotypic_series(data)
+
         # === NEW v2.0 ===
         data['text_sections'] = self._parse_text_sections(soup)
         data['allelic_variants'] = self._parse_allelic_variants(soup)
         data['clinical_synopsis'] = self._parse_clinical_synopsis(soup)
-        data['phenotypic_series'] = self._parse_phenotypic_series(soup)
 
         return dict(data)
 
@@ -376,31 +379,21 @@ class Entry(OMIM):
     # v2.0: phenotypic series
     # ------------------------------------------------------------------
 
-    def _parse_phenotypic_series(self, soup):
-        """Extract phenotypic series MIM numbers.
+    def _derive_phenotypic_series(self, data):
+        """Derive phenotypic series MIM numbers from geneMap.
+        For gene entries: geneMap phenotype MIMs = the phenotypic series.
+        For phenotype entries: geneMap may reference the causal gene;
+        full series resolution requires a DB join (not done here).
         Returns comma-separated string or None."""
-        ps_toggle = soup.select_one('#mimPhenotypicSeriesToggle')
-        if not ps_toggle:
-            return None
-
-        # Go up to the containing div and find MIM number links
-        container = ps_toggle.parent
-        while container and container.name != 'div':
-            container = container.parent
-
-        if not container:
+        gene_map = data.get('geneMap', [])
+        if not gene_map:
             return None
 
         mim_list = []
-        for link in container.find_all('a'):
-            href = link.get('href', '')
-            # Look for /entry/NNNNNN links
-            m = re.search(r'/entry/(\d+)', href)
-            if m:
-                mim = m.group(1)
-                if mim not in mim_list:
-                    mim_list.append(mim)
-
+        for entry in gene_map:
+            pheno_mim = entry.get('Phenotype MIM number', '')
+            if pheno_mim and pheno_mim.strip() and pheno_mim.strip() not in mim_list:
+                mim_list.append(pheno_mim.strip())
         return ','.join(mim_list) if mim_list else None
 
 
