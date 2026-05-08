@@ -289,93 +289,83 @@ class Entry(OMIM):
         if not cs_fold:
             return None
 
-        # Clinical synopsis is a hierarchy of divs:
-        #   .h5 strong  -> major category (e.g. INHERITANCE, CARDIOVASCULAR)
-        #   .h5 em      -> subcategory   (e.g. Heart, Vascular)
-        #   plain text   -> feature item with ontology IDs in .mim-feature-ids
+        # Clinical synopsis structure:
+        #   Top-level divs contain a category heading (.h5 strong),
+        #   optionally a subcategory (.h5 em), and feature items with
+        #   ontology IDs (.mim-feature-ids) — all inline within the same div.
         result = {}
         current_category = None
         current_subcategory = None
 
-        # get top-level children divs
         container = cs_fold.find('div') or cs_fold
         for child in container.find_all('div', recursive=False):
-            self._traverse_synopsis(child, result, None, None)
+            strong = child.find('strong')
+            em = child.find('em')
 
-        return json.dumps(result, ensure_ascii=False) if result else None
+            # --- major category heading (strong) ---
+            if strong:
+                cat_text = strong.get_text(strip=True)
+                if cat_text == 'Close':
+                    continue
+                current_category = cat_text
+                current_subcategory = None
+                if current_category not in result:
+                    result[current_category] = {}
 
-    def _traverse_synopsis(self, element, result, category, subcategory):
-        """Recursively traverse clinical synopsis divs."""
-        # check for category heading (.h5 strong)
-        strong = element.find('strong')
-        em = element.find('em')
+            # --- subcategory heading (em, may be in same div as strong) ---
+            if em:
+                sub_text = em.get_text(strip=True)
+                if current_category:
+                    current_subcategory = sub_text
+                    if current_subcategory not in result.get(current_category, {}):
+                        result[current_category][current_subcategory] = {'items': [], 'xrefs': {}}
 
-        if strong and not em:
-            # major category
-            category = strong.get_text(strip=True)
-            if category == 'Close':
-                return
-            if category not in result:
-                result[category] = {}
-            for child in element.find_all('div', recursive=False):
-                self._traverse_synopsis(child, result, category, None)
-            return
+            # --- feature items: text minus the heading labels ---
+            full_text = child.get_text(separator=' ', strip=True)
+            full_text = re.sub(r'\s{2,}', ' ', full_text)
+            # strip category/subcategory labels from the beginning
+            if strong:
+                full_text = re.sub(re.escape(strong.get_text(strip=True)), '', full_text, count=1)
+            if em:
+                full_text = re.sub(re.escape(em.get_text(strip=True)), '', full_text, count=1)
+            full_text = full_text.strip('- ')
 
-        if em:
-            # subcategory
-            subcategory = em.get_text(strip=True)
-            if category and subcategory:
-                if subcategory not in result.get(category, {}):
-                    result[category][subcategory] = {'items': [], 'xrefs': {}}
-            for child in element.find_all('div', recursive=False):
-                self._traverse_synopsis(child, result, category, subcategory)
-            return
+            if not full_text:
+                continue
 
-        # feature items — text with ontology IDs
-        text = element.get_text(separator=' ', strip=True)
-        text = re.sub(r'\s{2,}', ' ', text)
-        text = text.strip('- ')
+            # --- ontology xrefs from .mim-feature-ids spans ---
+            xrefs = {}
+            for feat_span in child.find_all('span', class_='mim-feature-ids'):
+                for link in feat_span.find_all('a'):
+                    href = link.get('href', '')
+                    txt = link.get_text(strip=True)
+                    if 'HP:0' in txt:
+                        xrefs.setdefault('HPO', []).append(txt.split(':')[-1] if ':' in txt else txt)
+                    elif 'SNOMEDCT' in href or 'SNOMEDCT' in feat_span.get_text():
+                        xrefs.setdefault('SNOMEDCT', []).append(txt)
+                    elif 'ICD10CM' in href:
+                        xrefs.setdefault('ICD10CM', []).append(txt)
+                    elif 'ICD9CM' in href:
+                        xrefs.setdefault('ICD9CM', []).append(txt)
+                    elif 'UMLS:' in feat_span.get_text():
+                        xrefs.setdefault('UMLS', []).append(txt)
 
-        if not text:
-            return
+            # --- store ---
+            if current_category and current_subcategory:
+                bucket = result[current_category].setdefault(current_subcategory, {'items': [], 'xrefs': {}})
+            elif current_category:
+                bucket = result[current_category].setdefault('_general', {'items': [], 'xrefs': {}})
+            else:
+                continue
 
-        # extract ontology IDs from .mim-feature-ids spans
-        xrefs = {}
-        for feat_span in element.find_all('span', class_='mim-feature-ids'):
-            for link in feat_span.find_all('a'):
-                href = link.get('href', '')
-                txt = link.get_text(strip=True)
-                # determine ontology source from href
-                if 'HP:0' in txt:
-                    xrefs.setdefault('HPO', []).append(txt.split(':')[-1] if ':' in txt else txt)
-                elif 'SNOMEDCT' in href or 'SNOMEDCT' in feat_span.get_text():
-                    xrefs.setdefault('SNOMEDCT', []).append(txt)
-                elif 'ICD10CM' in href:
-                    xrefs.setdefault('ICD10CM', []).append(txt)
-                elif 'ICD9CM' in href:
-                    xrefs.setdefault('ICD9CM', []).append(txt)
-                elif 'UMLS:' in feat_span.get_text():
-                    xrefs.setdefault('UMLS', []).append(txt)
-
-        # store the feature item
-        if category and subcategory:
-            bucket = result[category].setdefault(subcategory, {'items': [], 'xrefs': {}})
-            if text not in bucket['items']:
-                bucket['items'].append(text)
-            for src, ids in xrefs.items():
-                for id_ in ids:
-                    if id_ not in bucket['xrefs'].get(src, []):
-                        bucket['xrefs'].setdefault(src, []).append(id_)
-        elif category:
-            bucket = result[category].setdefault('_general', {'items': [], 'xrefs': {}})
-            if text not in bucket['items']:
-                bucket['items'].append(text)
+            if full_text not in bucket['items']:
+                bucket['items'].append(full_text)
             for src, ids in xrefs.items():
                 for id_ in ids:
                     if id_ not in bucket['xrefs'].get(src, []):
                         bucket['xrefs'].setdefault(src, []).append(id_)
 
-    # ------------------------------------------------------------------
+        return json.dumps(result, ensure_ascii=False) if result else None    # ------------------------------------------------------------------
     # v2.0: phenotypic series
     # ------------------------------------------------------------------
 
