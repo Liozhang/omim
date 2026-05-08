@@ -119,12 +119,18 @@ class Entry(OMIM):
             keys = [th.text.strip() for th in thead.select('th')]
             keys = [' '.join(key.split()).replace(' Clinical Synopses', '') for key in keys]
             for tr in tbody.select('tr'):
-                row = [td.text.strip() for td in tr.select('td')]
-                if len(row) == len(keys):
-                    values = row
+                cells = [td.text.strip() for td in tr.select('td')]
+                if len(cells) == len(keys):
+                    values = cells
                 else:
-                    # handle rowspan merging
-                    values = [data[xmap][-1].get(keys[0], '')] + row if data[xmap] else row
+                    # Rowspan merges cells from leftmost columns — fill
+                    # missing positions from the previous row.
+                    values = []
+                    prev = data[xmap][-1] if data[xmap] else {}
+                    missing = len(keys) - len(cells)
+                    for i in range(missing):
+                        values.append(prev.get(keys[i], ''))
+                    values.extend(cells)
                 data[xmap].append(dict(zip(keys, values)))
 
     # ------------------------------------------------------------------
@@ -257,8 +263,15 @@ class Entry(OMIM):
 
         # --- extract gene_symbol, mutation, rsid, RCV from text
         for text in text_parts:
-            # CFTR, PHE508DEL (rs113993960) pattern
-            m = re.search(r'(\b[A-Z][A-Z0-9]+)\s*,\s*([A-Z].+?)\s*(?:\(|$)', text)
+            # Gene symbol + mutation: requires gene symbol (3+ uppercase chars)
+            # and a mutation pattern (amino acid change or frameshift).
+            # e.g. "CFTR, PHE508DEL" / "TP53, ARG248TRP" / "CFTR, 1-BP DEL"
+            m = re.search(
+                r'\b([A-Z][A-Z0-9]{2,9})\s*,\s*'
+                r'((?:[A-Z]{3}\d+[A-Z*]+\w*|\d+-BP\s*(?:DEL|INS|DUP)))'
+                r'(?:\s|$|\(|\[|rs\d+|Ensembl|gnomAD|NCBI|UCSC|RCV\d+)',
+                text
+            )
             if m and not variant.get('gene_symbol'):
                 variant['gene_symbol'] = m.group(1)
                 variant['mutation'] = m.group(2).strip()
