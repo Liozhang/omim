@@ -2,7 +2,7 @@ import sqlalchemy
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.state import InstanceState
 
-from omim.db.model import Base
+from omim.db.model import Base, OMIM_ALLELIC_VARIANT
 
 from simple_loggers import SimpleLogger
 
@@ -22,9 +22,10 @@ class Manager(object):
         self.engine = sqlalchemy.create_engine(self.uri, echo=echo)
         self.engine.logger.level = self.logger.level
         self.session = self.connect()
-    
+
     def __enter__(self):
         self.create_table(drop=self.drop)
+        self.migrate()
         return self
 
     def __exit__(self, *exc_info):
@@ -40,6 +41,39 @@ class Manager(object):
         if drop:
             Base.metadata.drop_all(self.engine)
         Base.metadata.create_all(self.engine)
+
+    def migrate(self):
+        """Add new columns to existing tables if they don't exist.
+        SQLite does not support 'ADD COLUMN IF NOT EXISTS' directly,
+        so we check via PRAGMA table_info and add missing columns."""
+        import re
+
+        # Check existing columns in 'omim' table
+        existing = set()
+        try:
+            rows = self.engine.execute(
+                sqlalchemy.text("PRAGMA table_info(omim)")
+            ).fetchall()
+            existing = {row[1] for row in rows}
+        except Exception:
+            return  # table doesn't exist yet - create_all will handle it
+
+        new_columns = {
+            'text_sections': 'TEXT',
+            'clinical_synopsis': 'TEXT',
+            'phenotypic_series': 'TEXT',
+            'parser_version': 'VARCHAR(10)',
+        }
+
+        for col_name, col_type in new_columns.items():
+            if col_name not in existing:
+                self.logger.info(f'Migration: adding column {col_name} to omim')
+                self.engine.execute(
+                    sqlalchemy.text(
+                        f"ALTER TABLE omim ADD COLUMN {col_name} {col_type}"
+                    )
+                )
+                self.session.commit()
 
     def query(self, Meta, key=None, value=None, fuzzy=False):
         query = self.session.query(Meta)
@@ -79,3 +113,27 @@ class Manager(object):
                 self.logger.debug(f'>>> update data: {data}')
                 context = {k: v for k, v in data.__dict__.items() if not isinstance(v, InstanceState)}
                 res.update(context)
+
+    def insert_variants(self, mim_number, variants):
+        """Bulk insert or refresh allelic variants for a MIM entry.
+        Deletes existing variants for this mim_number, then inserts new ones."""
+        if not variants:
+            return
+
+        # Delete existing variants for this entry
+        self.session.query(OMIM_ALLELIC_VARIANT).filter(
+            OMIM_ALLELIC_VARIANT.mim_number == mim_number
+        ).delete()
+
+        # Insert new variants
+        for v in variants:
+            v['mim_number'] = mim_number
+            obj = OMIM_ALLELIC_VARIANT(**v)
+            self.session.add(obj)
+            self.logger.debug(f'>>> insert variant: {obj}')
+
+    def get_variants(self, mim_number):
+        """Query all allelic variants for a MIM entry."""
+        return self.session.query(OMIM_ALLELIC_VARIANT).filter(
+            OMIM_ALLELIC_VARIANT.mim_number == mim_number
+        ).all()

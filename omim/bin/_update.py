@@ -6,7 +6,7 @@ import datetime
 
 import click
 
-from omim import MIM_TYPES
+from omim import MIM_TYPES, PARSER_VERSION
 from omim.db import OMIM_DATA
 
 
@@ -14,6 +14,7 @@ from omim.db import OMIM_DATA
 @click.option('-t', '--mim-types', help='the types of mim crawl',
               type=click.Choice(MIM_TYPES), show_choices=True, multiple=True)
 @click.option('-m', '--mim2gene', help='download the mim2gene.txt file firstly', default='mim2gene.txt', show_default=True)
+@click.option('--force', help='force re-parse even if already up to date', is_flag=True)
 @click.pass_context
 def main(ctx, **kwargs):
     logger = ctx.obj['logger']
@@ -24,6 +25,7 @@ def main(ctx, **kwargs):
 
     mim_types = kwargs['mim_types']
     mim2gene = kwargs['mim2gene']
+    force = kwargs['force']
 
     need_update = True
     if mim2gene and os.path.isfile(mim2gene):
@@ -42,18 +44,33 @@ def main(ctx, **kwargs):
         for n, (mim, context) in enumerate(mim2gene_data, 1):
             logger.debug(f'dealing with: [{n}/{total}] {mim}')
             res = manager.query(OMIM_DATA, 'mim_number', mim)
-            if res.first() and context['mim_type'] == res.first().mim_type:
-                click.secho(f'*** skip mim_number: {mim}', fg='yellow')
-                continue
-            
+            existing = res.first()
+            if existing and not force:
+                # Skip if type matches and already parsed with current version
+                type_match = context['mim_type'] == existing.mim_type
+                version_ok = existing.parser_version == PARSER_VERSION
+                if type_match and version_ok:
+                    click.secho(f'*** skip mim_number: {mim} (up to date)', fg='yellow')
+                    continue
+                elif type_match and not version_ok:
+                    click.secho(f'*** re-parse mim_number: {mim} (version upgrade)', fg='cyan')
+
             data = entry.parse(mim)
             context.update(data)
+
+            # Separate allelic_variants for variant table; rest goes to omim table
+            allelic_variants = context.pop('allelic_variants', None)
             temp_dict = {
-                k: json.dumps(v) if isinstance(v, list) else v 
+                k: json.dumps(v) if isinstance(v, list) else v
                 for k, v in context.items()
             }
+            temp_dict['parser_version'] = PARSER_VERSION
             omim_data = OMIM_DATA(**temp_dict)
             manager.insert(OMIM_DATA, 'mim_number', omim_data)
+
+            # Insert allelic variants into separate table
+            if allelic_variants:
+                manager.insert_variants(mim, allelic_variants)
 
             time.sleep(random.randint(6, 10))
 

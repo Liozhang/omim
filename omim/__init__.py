@@ -35,3 +35,5 @@ MIM_PREFIX_EXPLAIN = {
     '': 'Other, mainly phenotypes with suspected mendelian basis',
     '^': 'Moved/Removed',
 }
+
+PARSER_VERSION = '2.0'

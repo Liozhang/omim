@@ -82,13 +82,14 @@ def main(ctx, **kwargs):
                     context = {}
                     for k, v in each.as_dict.items():
                         if v:
-                            if k in ('geneMap', 'phenotypeMap'):
+                            if k in ('geneMap', 'phenotypeMap',
+                                     'text_sections', 'clinical_synopsis'):
                                 v = json.loads(v)
                             elif k == 'generated':
                                 v = v.strftime('%Y-%m-%d')
                         context[k] = v
                     data.append(context)
-                
+
                 data = json.dumps(data, indent=2)
                 if kwargs['color']:
                     data = highlight(data, lexers.JsonLexer(), formatters.TerminalFormatter())
