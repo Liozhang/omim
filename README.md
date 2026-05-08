@@ -61,6 +61,12 @@ Commands:
 omim update
 ```
 
+> force re-parse all entries (even if already up to date)
+
+```
+omim update --force
+```
+
 ### 3. faq
 > explains of some FAQ
 
@@ -116,21 +122,25 @@ Options:
 
 `omim query -K` 
 ```
-+------------------+-----------------------+--------------+
-| Key              | Comment               | Type         |
-+------------------+-----------------------+--------------+
-| mim_number       | MIM Number            | VARCHAR(10)  |
-| prefix           | The prefix symbol     | VARCHAR(1)   |
-| title            | The title             | VARCHAR(50)  |
-| references       | The references        | VARCHAR(300) |
-| geneMap          | The geneMap data      | VARCHAR(300) |
-| phenotypeMap     | The phenotypeMap data | VARCHAR(300) |
-| mim_type         | The mim_type          | VARCHAR(20)  |
-| entrez_gene_id   | The entrez_gene_id    | VARCHAR(20)  |
-| ensembl_gene_id  | The ensembl_gene_id   | VARCHAR(20)  |
-| hgnc_gene_symbol | The hgnc_gene_symbol  | VARCHAR(20)  |
-| generated        | The generated time    | DATETIME     |
-+------------------+-----------------------+--------------+
++----------------------+------------------------------------------+--------------+
+| Key                  | Comment                                  | Type         |
++----------------------+------------------------------------------+--------------+
+| mim_number           | MIM Number                               | VARCHAR(10)  |
+| prefix               | The prefix symbol                        | VARCHAR(1)   |
+| title                | The title                                | VARCHAR(300) |
+| references           | The references                           | TEXT         |
+| geneMap              | The geneMap data (JSON)                  | TEXT         |
+| phenotypeMap         | The phenotypeMap data (JSON)             | TEXT         |
+| mim_type             | The mim_type                             | VARCHAR(20)  |
+| entrez_gene_id       | The entrez_gene_id                       | VARCHAR(20)  |
+| ensembl_gene_id      | The ensembl_gene_id                      | VARCHAR(20)  |
+| hgnc_gene_symbol     | The hgnc_gene_symbol                     | VARCHAR(20)  |
+| generated            | The generated time                       | DATETIME     |
+| text_sections        | Full text subsections (JSON)             | TEXT         |
+| clinical_synopsis    | Clinical synopsis with ontology IDs      | TEXT         |
+| phenotypic_series    | Phenotypic series MIM numbers            | TEXT         |
+| parser_version       | Parser version                           | VARCHAR(10)  |
++----------------------+------------------------------------------+--------------+
 ```
 
 - search with a key
@@ -397,7 +407,7 @@ None	16429403, 10051328, 17425602, 18548003, 10903931, 21920918, 12571257, 32911
 ```python
 import omim
 from omim import util
-from omim.db import Manager, OMIM_DATA
+from omim.db import Manager, OMIM_DATA, OMIM_ALLELIC_VARIANT
 
 manager = Manager(dbfile=omim.DEFAULT_DB)
 
@@ -425,6 +435,22 @@ items = res.all()
 # content of result
 print(item.mim_number, item.title)
 print(item.as_dict)
+
+# --- v2.0: new fields ---
+import json
+
+# text sections (JSON string -> dict)
+text_sections = json.loads(item.text_sections)
+print(text_sections.keys())  # e.g. ['description', 'mapping', 'molecular_genetics', ...]
+
+# clinical synopsis with ontology IDs (JSON string -> dict)
+synopsis = json.loads(item.clinical_synopsis)
+print(synopsis)  # e.g. {'INHERITANCE': {...}, 'CARDIOVASCULAR': {...}}
+
+# query allelic variants for a gene entry
+variants = manager.get_variants('602421')
+for v in variants[:3]:
+    print(v.variant_id, v.phenotype_name, v.gene_symbol, v.mutation, v.rsid)
 ```
 
 ---
